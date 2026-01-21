@@ -1,0 +1,517 @@
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>切断指示書・発注書作成ツール</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://unpkg.com/lucide@latest"></script>
+    <style>
+        @import url('https://fonts.googleapis.com/css2?family=Noto+Sans+JP:wght@400;500;700&display=swap');
+        body { font-family: 'Noto Sans JP', sans-serif; }
+        .cut-segment { transition: all 0.2s; }
+        .cut-segment:hover { opacity: 0.9; z-index: 10; transform: scaleY(1.1); }
+        .animate-fade-in { animation: fadeIn 0.4s ease-out forwards; }
+        @keyframes fadeIn { from { opacity: 0; transform: translateY(10px); } to { opacity: 1; transform: translateY(0); } }
+
+        /* --- 印刷用スタイル --- */
+        @media print {
+            @page { margin: 10mm; size: A4 portrait; }
+            
+            /* 全体を隠す */
+            body { visibility: hidden; }
+            
+            /* 印刷コンテナとその中身だけを表示 */
+            #printContainer, #printContainer * { 
+                visibility: visible; 
+            }
+
+            #printContainer {
+                display: block !important; /* hiddenクラスを強制解除 */
+                position: absolute;
+                left: 0;
+                top: 0;
+                width: 100%;
+                min-height: 100%;
+                background: white;
+                color: black;
+                z-index: 9999;
+            }
+            
+            /* 印刷時は背景色を強制出力 */
+            .print-bg-gray { 
+                background-color: #f3f4f6 !important; 
+                -webkit-print-color-adjust: exact; 
+                print-color-adjust: exact; 
+            }
+            .print-border { border: 1px solid #d1d5db !important; }
+            .no-print { display: none !important; }
+            
+            /* 改ページ制御 */
+            .page-break { page-break-inside: avoid; margin-bottom: 20px; }
+        }
+    </style>
+</head>
+<body class="bg-slate-100 text-slate-800 min-h-screen pb-20">
+
+    <!-- Screen UI -->
+    <div class="max-w-5xl mx-auto p-4 md:p-6 no-print">
+        
+        <!-- Header -->
+        <header class="mb-6 flex flex-col md:flex-row md:items-end justify-between gap-4">
+            <div>
+                <h1 class="text-2xl md:text-3xl font-bold text-slate-800 flex items-center gap-2">
+                    <i data-lucide="clipboard-list" class="text-indigo-600"></i>
+                    切断指示・発注管理ツール
+                </h1>
+                <p class="text-slate-500 text-sm mt-1">定尺材カット計算 ＋ 書類作成</p>
+            </div>
+            <button onclick="loadSampleData()" class="text-sm text-indigo-600 hover:text-indigo-800 underline">
+                サンプルデータを入力
+            </button>
+        </header>
+
+        <!-- Input Section -->
+        <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 mb-6">
+            
+            <!-- Settings (Left Col) -->
+            <div class="lg:col-span-4 space-y-4">
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 sticky top-4">
+                    <h2 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <i data-lucide="settings" class="w-4 h-4"></i> ① 材質・定尺設定
+                    </h2>
+                    
+                    <div class="space-y-4">
+                        <div>
+                            <label class="block text-sm font-medium text-slate-700 mb-1">材質名 / グループ名</label>
+                            <div class="relative">
+                                <i data-lucide="tag" class="absolute left-3 top-2.5 w-4 h-4 text-slate-400"></i>
+                                <input type="text" id="matName" value="L-50x50x6" class="w-full pl-9 pr-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none font-medium" placeholder="例: SUS-304">
+                            </div>
+                        </div>
+
+                        <div class="grid grid-cols-2 gap-3">
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 mb-1">定尺長さ (mm)</label>
+                                <input type="number" id="stockLen" value="5500" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                            </div>
+                            <div>
+                                <label class="block text-xs font-medium text-slate-600 mb-1">刃代 (mm)</label>
+                                <input type="number" id="kerf" value="3" class="w-full px-3 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none">
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Parts Input (Right Col) -->
+            <div class="lg:col-span-8">
+                <div class="bg-white rounded-xl shadow-sm border border-slate-200 p-5 h-full flex flex-col">
+                    <h2 class="text-sm font-bold text-slate-500 uppercase tracking-wider mb-4 flex items-center gap-2">
+                        <i data-lucide="scissors" class="w-4 h-4"></i> ② 切り出し寸法入力
+                    </h2>
+
+                    <div class="flex flex-col sm:flex-row gap-4 items-end mb-6">
+                        <div class="flex-1 w-full">
+                            <label class="block text-sm font-medium text-slate-700 mb-1">長さ (mm)</label>
+                            <input type="number" id="partLen" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none text-lg" placeholder="1200" onkeydown="handleEnter(event)">
+                        </div>
+                        <div class="w-full sm:w-32">
+                            <label class="block text-sm font-medium text-slate-700 mb-1">数量</label>
+                            <input type="number" id="partQty" value="1" class="w-full px-4 py-2 border border-slate-300 rounded-lg focus:ring-2 focus:ring-indigo-500 focus:outline-none text-lg" onkeydown="handleEnter(event)">
+                        </div>
+                        <button onclick="addPart()" class="w-full sm:w-auto px-6 py-3 bg-indigo-600 hover:bg-indigo-700 text-white font-bold rounded-lg transition-colors flex items-center justify-center gap-2 shadow-sm whitespace-nowrap">
+                            <i data-lucide="plus" class="w-5 h-5"></i> 追加
+                        </button>
+                    </div>
+
+                    <!-- List Preview -->
+                    <div class="flex-1 flex flex-col min-h-[200px]">
+                        <div class="flex justify-between items-center mb-2 border-b border-slate-100 pb-2">
+                            <span class="text-sm font-bold text-slate-600">入力リスト</span>
+                            <button onclick="clearAll()" class="text-xs text-red-500 hover:text-red-700">全削除</button>
+                        </div>
+                        
+                        <div class="overflow-y-auto max-h-[300px] custom-scrollbar">
+                            <table class="w-full text-left border-collapse">
+                                <thead class="sticky top-0 bg-white z-10">
+                                    <tr class="text-xs text-slate-400 border-b border-slate-100">
+                                        <th class="py-2 font-medium">材質</th>
+                                        <th class="py-2 font-medium">定尺</th>
+                                        <th class="py-2 font-medium">カット長さ</th>
+                                        <th class="py-2 font-medium">数量</th>
+                                        <th class="py-2 text-right"></th>
+                                    </tr>
+                                </thead>
+                                <tbody id="partsTableBody" class="text-sm">
+                                    <tr>
+                                        <td colspan="5" class="py-8 text-center text-slate-400">データがありません</td>
+                                    </tr>
+                                </tbody>
+                            </table>
+                        </div>
+                    </div>
+                    
+                    <div class="mt-4 pt-4 border-t border-slate-100">
+                        <button onclick="calculateAll()" id="calcBtn" class="w-full py-3 bg-slate-800 hover:bg-slate-900 text-white font-bold rounded-xl shadow-lg hover:shadow-xl transition-all transform active:scale-[0.99] flex items-center justify-center gap-2 disabled:opacity-50 disabled:cursor-not-allowed" disabled>
+                            <i data-lucide="calculator" class="w-5 h-5"></i>
+                            計算を実行
+                        </button>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <!-- Results Area -->
+        <div id="resultsArea" class="hidden animate-fade-in pb-10">
+            
+            <!-- Actions Bar -->
+            <div class="bg-indigo-50 border border-indigo-100 rounded-xl p-4 mb-6 flex flex-col md:flex-row justify-between items-center gap-4">
+                <div class="flex items-center gap-2 text-indigo-900 font-bold">
+                    <i data-lucide="check-circle" class="w-5 h-5"></i>
+                    計算完了
+                </div>
+                <div class="flex gap-3 w-full md:w-auto">
+                    <button onclick="printCutList()" class="flex-1 md:flex-none px-4 py-2 bg-white border border-indigo-200 text-indigo-700 hover:bg-indigo-50 font-medium rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors">
+                        <i data-lucide="printer" class="w-4 h-4"></i> 切断指示書(印刷)
+                    </button>
+                    <button onclick="downloadOrderCSV()" class="flex-1 md:flex-none px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white font-medium rounded-lg shadow-sm flex items-center justify-center gap-2 transition-colors">
+                        <i data-lucide="download" class="w-4 h-4"></i> 発注書(CSV)
+                    </button>
+                </div>
+            </div>
+
+            <div id="resultsContainer" class="grid grid-cols-1 gap-8"></div>
+        </div>
+    </div>
+
+    <!-- Print Container (Hidden on Screen, Visible on Print) -->
+    <div id="printContainer" class="hidden">
+        <div class="p-8">
+            <div class="flex justify-between items-end border-b-2 border-gray-800 pb-4 mb-8">
+                <div>
+                    <h1 class="text-3xl font-bold text-gray-900">定尺材 切断指示書</h1>
+                    <p class="text-gray-500 mt-1" id="printDate">発行日: 2023/--/--</p>
+                </div>
+                <div class="text-right">
+                    <div class="text-sm text-gray-500">案件名 / 工番</div>
+                    <div class="h-8 w-64 border-b border-gray-400"></div>
+                </div>
+            </div>
+            
+            <div id="printContent" class="space-y-8">
+                <!-- Content will be injected here -->
+            </div>
+        </div>
+    </div>
+
+    <!-- Script Logic -->
+    <script>
+        lucide.createIcons();
+
+        // Data Store
+        let partsList = [];
+        let calculatedGroups = []; // Store calculation results
+
+        function handleEnter(e) { if (e.key === 'Enter') addPart(); }
+
+        function addPart() {
+            const matName = document.getElementById('matName').value.trim() || '未設定';
+            const stockLen = parseFloat(document.getElementById('stockLen').value);
+            const kerf = parseFloat(document.getElementById('kerf').value);
+            const partLen = parseFloat(document.getElementById('partLen').value);
+            const partQty = parseInt(document.getElementById('partQty').value);
+
+            if (!stockLen || stockLen <= 0) return alert('定尺長さを入力してください');
+            if (isNaN(kerf) || kerf < 0) return alert('刃代を正しく入力してください');
+            if (!partLen || partLen <= 0) return alert('カット長さを入力してください');
+            if (!partQty || partQty <= 0) return alert('数量を入力してください');
+            if (partLen > stockLen) return alert(`カット長さ(${partLen})が定尺(${stockLen})を超えています`);
+
+            partsList.push({
+                id: Date.now(),
+                material: matName,
+                stockLen: stockLen,
+                kerf: kerf,
+                length: partLen,
+                qty: partQty
+            });
+
+            document.getElementById('partLen').value = '';
+            document.getElementById('partQty').value = '1';
+            document.getElementById('partLen').focus();
+            renderList();
+        }
+
+        function removePart(id) {
+            partsList = partsList.filter(p => p.id !== id);
+            renderList();
+            document.getElementById('resultsArea').classList.add('hidden');
+        }
+
+        function clearAll() {
+            if (!confirm('リストを全削除しますか？')) return;
+            partsList = [];
+            renderList();
+            document.getElementById('resultsArea').classList.add('hidden');
+        }
+
+        function renderList() {
+            const tbody = document.getElementById('partsTableBody');
+            const calcBtn = document.getElementById('calcBtn');
+
+            if (partsList.length === 0) {
+                tbody.innerHTML = `<tr><td colspan="5" class="py-8 text-center text-slate-400">データがありません</td></tr>`;
+                calcBtn.disabled = true;
+                return;
+            }
+
+            calcBtn.disabled = false;
+            tbody.innerHTML = '';
+            
+            [...partsList].reverse().forEach(p => {
+                const tr = document.createElement('tr');
+                tr.className = 'border-b border-slate-50 hover:bg-slate-50 transition-colors group';
+                tr.innerHTML = `
+                    <td class="py-2 font-medium text-slate-700">${p.material}</td>
+                    <td class="py-2 text-slate-500 text-xs">${p.stockLen}</td>
+                    <td class="py-2 font-bold text-slate-800">${p.length}</td>
+                    <td class="py-2">${p.qty}</td>
+                    <td class="py-2 text-right">
+                        <button onclick="removePart(${p.id})" class="text-slate-300 hover:text-red-500 p-1">
+                            <i data-lucide="trash-2" class="w-4 h-4"></i>
+                        </button>
+                    </td>
+                `;
+                tbody.appendChild(tr);
+            });
+            lucide.createIcons();
+        }
+
+        // --- Calculation Logic (FFD) ---
+        function calculateAll() {
+            const container = document.getElementById('resultsContainer');
+            container.innerHTML = '';
+            calculatedGroups = []; // Reset
+
+            // Grouping
+            const groups = {};
+            partsList.forEach(p => {
+                const key = `${p.material}|${p.stockLen}|${p.kerf}`;
+                if (!groups[key]) groups[key] = { material: p.material, stockLen: p.stockLen, kerf: p.kerf, parts: [] };
+                for (let i = 0; i < p.qty; i++) groups[key].parts.push(p.length);
+            });
+
+            // Solving
+            Object.values(groups).forEach(group => {
+                const resultBins = solveCuttingStock(group.stockLen, group.parts, group.kerf);
+                
+                // Store for CSV/Print
+                calculatedGroups.push({
+                    info: group,
+                    bins: resultBins
+                });
+
+                // Render HTML Card
+                const html = createResultCard(group, resultBins);
+                container.innerHTML += html;
+            });
+
+            document.getElementById('resultsArea').classList.remove('hidden');
+            setTimeout(() => {
+                document.getElementById('resultsArea').scrollIntoView({ behavior: 'smooth' });
+                lucide.createIcons();
+            }, 100);
+        }
+
+        function solveCuttingStock(stockLen, parts, kerf) {
+            const sortedParts = [...parts].sort((a, b) => b - a);
+            const bins = []; 
+
+            for (const part of sortedParts) {
+                let placed = false;
+                for (const bin of bins) {
+                    const cost = (bin.cuts.length > 0) ? (part + kerf) : part;
+                    if (bin.remaining >= cost) {
+                        bin.cuts.push(part);
+                        bin.remaining -= cost;
+                        placed = true;
+                        break;
+                    }
+                }
+                if (!placed) {
+                    bins.push({ remaining: stockLen - part, cuts: [part] });
+                }
+            }
+            return bins;
+        }
+
+        function createResultCard(group, bins) {
+            const totalUsedLen = bins.reduce((sum, bin) => sum + bin.cuts.reduce((a,b)=>a+b,0), 0);
+            const totalMatLen = bins.length * group.stockLen;
+            const yieldRate = totalMatLen > 0 ? ((totalUsedLen / totalMatLen) * 100).toFixed(1) : 0;
+
+            let binsHtml = '';
+            bins.forEach((bin, idx) => {
+                let bars = '';
+                bin.cuts.forEach((cut, i) => {
+                    const widthPct = (cut / group.stockLen) * 100;
+                    const bg = i % 2 === 0 ? 'bg-indigo-500' : 'bg-indigo-400';
+                    bars += `<div class="${bg} h-full flex items-center justify-center text-[10px] text-white border-r border-indigo-600/30 relative group first:rounded-l" style="width:${widthPct}%"><span class="truncate px-1">${cut}</span></div>`;
+                });
+                if (bin.remaining > 0) {
+                    const remPct = (bin.remaining / group.stockLen) * 100;
+                    bars += `<div class="bg-slate-100 h-full flex items-center justify-center text-[10px] text-slate-400 last:rounded-r" style="width:${remPct}%"><span class="truncate px-1">${bin.remaining.toFixed(1)}</span></div>`;
+                }
+
+                binsHtml += `
+                    <div class="mb-3">
+                        <div class="flex justify-between text-xs text-slate-500 mb-1 px-1">
+                            <span class="font-bold text-slate-700">#${idx+1}</span>
+                            <span>残: <strong class="text-slate-800">${bin.remaining.toFixed(1)}</strong></span>
+                        </div>
+                        <div class="w-full h-6 bg-slate-200 rounded flex overflow-hidden ring-1 ring-slate-200">${bars}</div>
+                        <div class="text-[10px] text-slate-500 mt-1 px-1 tracking-tight">${bin.cuts.join(', ')}</div>
+                    </div>
+                `;
+            });
+
+            return `
+                <div class="bg-white rounded-xl shadow border border-slate-200 overflow-hidden page-break">
+                    <div class="bg-slate-50 border-b border-slate-100 p-4 flex justify-between items-center">
+                        <div>
+                            <h3 class="font-bold text-lg text-slate-800">${group.material}</h3>
+                            <p class="text-xs text-slate-500">L=${group.stockLen} / 刃代=${group.kerf}</p>
+                        </div>
+                        <div class="text-right">
+                            <div class="text-2xl font-bold text-indigo-600">${bins.length}<span class="text-sm text-slate-500 font-normal ml-1">本</span></div>
+                            <div class="text-xs text-slate-400">歩留: ${yieldRate}%</div>
+                        </div>
+                    </div>
+                    <div class="p-4 grid grid-cols-1 md:grid-cols-2 lg:grid-cols-3 gap-x-6 gap-y-2">
+                        ${binsHtml}
+                    </div>
+                </div>
+            `;
+        }
+
+        // --- Export & Print Features ---
+
+        function downloadOrderCSV() {
+            if (calculatedGroups.length === 0) return alert('先に計算を実行してください');
+
+            const headers = ['材質', '定尺長さ(mm)', '必要本数(本)', '総カット長(mm)', '歩留まり(%)', '備考'];
+            const rows = [];
+
+            calculatedGroups.forEach(g => {
+                const totalStock = g.bins.length;
+                const totalUsed = g.bins.reduce((s, b) => s + b.cuts.reduce((x,y)=>x+y,0), 0);
+                const totalCap = totalStock * g.info.stockLen;
+                const yieldPct = totalCap > 0 ? ((totalUsed / totalCap) * 100).toFixed(1) : 0;
+
+                rows.push([
+                    g.info.material,
+                    g.info.stockLen,
+                    totalStock,
+                    totalUsed,
+                    yieldPct,
+                    '' // 備考
+                ]);
+            });
+
+            // BOM for Excel
+            const bom = new Uint8Array([0xEF, 0xBB, 0xBF]);
+            const csvContent = headers.join(',') + '\n' + rows.map(r => r.join(',')).join('\n');
+            const blob = new Blob([bom, csvContent], { type: 'text/csv' });
+            
+            const url = window.URL.createObjectURL(blob);
+            const a = document.createElement('a');
+            const today = new Date().toISOString().slice(0,10).replace(/-/g,'');
+            a.href = url;
+            a.download = `発注リスト_${today}.csv`;
+            a.click();
+            window.URL.revokeObjectURL(url);
+        }
+
+        function printCutList() {
+            if (calculatedGroups.length === 0) return alert('先に計算を実行してください');
+
+            // Set Date
+            const now = new Date();
+            document.getElementById('printDate').innerText = `発行日: ${now.toLocaleDateString('ja-JP')} ${now.getHours()}:${String(now.getMinutes()).padStart(2,'0')}`;
+
+            // Build Print HTML
+            const printContent = document.getElementById('printContent');
+            printContent.innerHTML = '';
+
+            calculatedGroups.forEach(g => {
+                const totalStock = g.bins.length;
+                
+                // Build Table Rows for this material
+                let rowsHtml = '';
+                g.bins.forEach((bin, idx) => {
+                    // Visualize bar for print
+                    let barHtml = '';
+                    bin.cuts.forEach(c => {
+                        const w = (c / g.info.stockLen) * 100;
+                        barHtml += `<div style="width:${w}%; background-color:#9ca3af; border-right:1px solid #fff; height:100%; float:left; display:flex; align-items:center; justify-content:center; font-size:9px; color:white; overflow:hidden;">${c}</div>`;
+                    });
+                    
+                    rowsHtml += `
+                        <tr class="border-b border-gray-300 break-inside-avoid">
+                            <td class="py-2 px-2 text-center font-bold text-gray-700 w-12">#${idx + 1}</td>
+                            <td class="py-2 px-2">
+                                <div class="text-sm font-bold text-gray-800 mb-1 tracking-tight">${bin.cuts.join(', ')}</div>
+                                <div class="w-full h-4 bg-gray-100 border border-gray-300 print-bg-gray print-border rounded-sm overflow-hidden">
+                                    ${barHtml}
+                                </div>
+                            </td>
+                            <td class="py-2 px-2 text-right font-mono font-bold text-gray-800 w-24">
+                                ${bin.remaining} <span class="text-xs font-normal text-gray-500">mm</span>
+                            </td>
+                        </tr>
+                    `;
+                });
+
+                // Section for Material
+                const section = document.createElement('div');
+                section.className = 'page-break mb-8';
+                section.innerHTML = `
+                    <div class="border-2 border-gray-800 rounded-lg overflow-hidden">
+                        <div class="bg-gray-800 text-white p-3 flex justify-between items-center print-bg-gray" style="background-color:#1f2937 !important; -webkit-print-color-adjust: exact;">
+                            <div class="font-bold text-lg">${g.info.material}</div>
+                            <div class="text-sm">定尺: ${g.info.stockLen}mm (刃代: ${g.info.kerf}mm) / 必要数: <span class="text-xl font-bold">${totalStock}</span>本</div>
+                        </div>
+                        <table class="w-full text-left collapse">
+                            <thead class="bg-gray-100 border-b border-gray-300 print-bg-gray" style="background-color:#f3f4f6 !important;">
+                                <tr>
+                                    <th class="py-1 px-2 text-xs text-gray-500 text-center">No.</th>
+                                    <th class="py-1 px-2 text-xs text-gray-500">切断パターン (長さ mm)</th>
+                                    <th class="py-1 px-2 text-xs text-gray-500 text-right">残材 (mm)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                ${rowsHtml}
+                            </tbody>
+                        </table>
+                    </div>
+                `;
+                printContent.appendChild(section);
+            });
+
+            window.print();
+        }
+
+        function loadSampleData() {
+            partsList = [
+                { id: 1, material: 'L-50x50x6 (SUS)', stockLen: 5500, kerf: 3, length: 1200, qty: 5 },
+                { id: 2, material: 'L-50x50x6 (SUS)', stockLen: 5500, kerf: 3, length: 850, qty: 4 },
+                { id: 3, material: 'PIPE-50A (SGP)', stockLen: 4000, kerf: 5, length: 1550, qty: 3 },
+                { id: 4, material: 'PIPE-50A (SGP)', stockLen: 4000, kerf: 5, length: 900, qty: 5 },
+            ];
+            renderList();
+            calculateAll();
+        }
+    </script>
+</body>
+</html>
